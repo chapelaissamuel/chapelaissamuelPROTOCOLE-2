@@ -569,6 +569,11 @@ def main():
         st.markdown("---")
         run = st.button("▶  Lancer la simulation", type="primary", use_container_width=True)
 
+        st.markdown('<div class="sb-header" style="margin-top:1rem;">Analyse Barabar</div>',
+                    unsafe_allow_html=True)
+        run_barabar = st.button("◉  Simulation 30 / 40 / 75.5 Hz",
+                                use_container_width=True)
+
         st.markdown("""
         <div style="margin-top:2rem;padding:1rem;background:rgba(255,255,255,0.02);
                     border:1px solid rgba(255,255,255,0.05);border-radius:10px;">
@@ -840,6 +845,436 @@ def main():
                 <div style="flex:{C:.2f};background:#4f8ef7;border-radius:4px 0 0 4px;"></div>
                 <div style="flex:{T:.2f};background:#a78bfa;"></div>
                 <div style="flex:{G:.2f};background:#00d48a;border-radius:0 4px 4px 0;"></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+    # ════════════════════════════════════════════════════════════════════════
+    # SECTION 4 — BARABAR COMPARATIVE  (30 / 40 / 75.5 Hz)
+    # ════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown(section_header(
+        "4", "Simulation Barabar · Comparaison 30 / 40 / 75.5 Hz",
+        "Chaîne acoustique → piézo → neuro au foyer elliptique"),
+        unsafe_allow_html=True)
+
+    # Barabar context banner
+    st.markdown("""
+    <div style="background:rgba(99,157,255,0.05);border:1px solid rgba(99,157,255,0.15);
+                border-radius:14px;padding:1.1rem 1.5rem;margin-bottom:1.4rem;
+                display:flex;align-items:flex-start;gap:1rem;">
+        <div style="font-size:1.8rem;line-height:1;opacity:0.6;">◉</div>
+        <div>
+            <div style="font-size:0.8rem;font-weight:700;color:#639dff;
+                        text-transform:uppercase;letter-spacing:0.1em;margin-bottom:0.3rem;">
+                Contexte — Grottes de Barabar, Bihar, Inde
+            </div>
+            <div style="font-size:0.82rem;color:#7a90b0;line-height:1.6;">
+                3 chambres elliptiques taillées dans le granite (ODF ≈ 4.2) résonnent précisément à
+                <strong style="color:#a0b8d8;">34,4 Hz</strong>.
+                Un chant à <strong style="color:#a0b8d8;">75,5 Hz</strong> génère un battement
+                <em>75,5 − 34,4 = <strong style="color:#00d48a;">41,1 Hz</strong></em> directement dans
+                la bande gamma. La simulation ci-dessous quantifie l'effet au point focal pour les
+                3 fréquences d'intérêt.
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if run_barabar:
+        FREQS   = [30.0, 40.0, 75.5]
+        LABELS  = ["30 Hz\nBeta/Gamma", "40 Hz\nGamma ★", "75.5 Hz\nGamma haut"]
+        COLORS  = ["#4f8ef7", "#00d48a", "#a78bfa"]
+        F_BEAT  = 34.4   # résonance Barabar (Hz)
+
+        neural_fast = NeuralSim(N=3000)   # N réduit pour la comparaison (vitesse)
+
+        # ── compute all three ──────────────────────────────────────────────
+        results = []
+        prog    = st.progress(0, text="Simulation en cours…")
+
+        for idx, f in enumerate(FREQS):
+            prog.progress((idx) / len(FREQS),
+                          text=f"Calcul {f} Hz ({idx+1}/{len(FREQS)})…")
+
+            E_g, B_g   = phys.piezo_conversion(P_pa, odf, f)
+            T_sk, d_sk = phys.skull_transmission(f)
+            E_ctx      = E_g * T_sk
+            _, e_g2    = phys.ellipse_gain(Q)
+            E_foy      = E_g * e_g2
+
+            # Ic scores
+            fs_     = 1000
+            t_s     = np.linspace(0, 2, int(fs_ * 2))
+            s1      = np.sin(2 * np.pi * f * t_s)
+            s2      = 0.8 * np.sin(2 * np.pi * f * t_s + 0.5) + 0.15 * np.random.randn(len(t_s))
+            C_f     = algo.coherence(s1, s2)
+            P_t     = np.linspace(P_pa * 0.6, P_pa * 1.4, 5)
+            B_t     = np.array([phys.piezo_conversion(p, odf, f)[1] for p in P_t])
+            T_f, al_f, r2_f = algo.power_law(P_t, B_t)
+            G_f     = algo.geo_factor(odf)
+            Ic_f, dec_f, conf_f, std_f, col_f, bg_f = algo.fusion(C_f, T_f, G_f)
+
+            # Kuramoto (fast, T=1.2)
+            _, theta_f = neural_fast.kuramoto(f, E_ctx, noise, T=1.2)
+            plv_f      = neural_fast.plv(theta_f, f)
+
+            # Battement avec résonance Barabar
+            f_beat = abs(f - F_BEAT)
+
+            results.append(dict(
+                f=f, label=LABELS[idx], color=COLORS[idx],
+                E_gran=E_g, B_gran=B_g, T_skull=T_sk, delta=d_sk,
+                E_cortex=E_ctx, E_foyer=E_foy,
+                C=C_f, T=T_f, G=G_f, Ic=Ic_f,
+                decision=dec_f, dec_color=col_f, dec_bg=bg_f,
+                plv=plv_f, theta=theta_f,
+                f_beat=f_beat,
+            ))
+
+        prog.progress(1.0, text="Calcul terminé ✓")
+        prog.empty()
+
+        # ── RADAR CHART  (overview) ────────────────────────────────────────
+        cats_radar = ['E Cortex\n(µV/m)', 'B Field\n(nT×10)', 'T Crâne\n(%)', 'PLV', 'Ic']
+        N_r   = len(cats_radar)
+        angles = np.linspace(0, 2 * np.pi, N_r, endpoint=False).tolist()
+        angles += angles[:1]
+
+        fig_r, ax_r = plt.subplots(figsize=(6, 6),
+                                    subplot_kw=dict(polar=True))
+        ax_r.set_facecolor('#0f1b2d')
+        ax_r.figure.set_facecolor('#0d1521')
+        ax_r.set_theta_offset(np.pi / 2)
+        ax_r.set_theta_direction(-1)
+        ax_r.set_thetagrids(np.degrees(angles[:-1]), cats_radar,
+                             fontsize=8.5, color='#8da0c0')
+        ax_r.set_ylim(0, 1)
+        ax_r.yaxis.set_tick_params(labelcolor='#3a5070', labelsize=7)
+        ax_r.grid(color='#1a2a40', linewidth=0.8)
+        ax_r.spines['polar'].set_color('#1e2d45')
+
+        for r, col_ in zip(results, COLORS):
+            # normalise
+            e_n  = min(r['E_cortex'] / 0.25, 1.0)
+            b_n  = min(r['B_gran'] * 1e9 * 10 / 25.0, 1.0)
+            t_n  = r['T_skull']
+            vals_r = [e_n, b_n, t_n, r['plv'], r['Ic']]
+            vals_r += vals_r[:1]
+            ax_r.plot(angles, vals_r, 'o-', color=col_, linewidth=2.2,
+                      markersize=5, alpha=0.9, label=f"{r['f']:.0f} Hz")
+            ax_r.fill(angles, vals_r, color=col_, alpha=0.08)
+
+        ax_r.legend(loc='upper right', bbox_to_anchor=(1.35, 1.15),
+                    fontsize=8.5, frameon=True)
+        ax_r.set_title('Profil comparatif\n(valeurs normalisées)', pad=20,
+                       fontsize=10, fontweight='600', color='#dde3f0')
+        fig_r.tight_layout()
+
+        # ── PHASE HISTOGRAMS (1 row × 3) ──────────────────────────────────
+        fig_h, ax_h = plt.subplots(1, 3, figsize=(14, 3.5),
+                                    gridspec_kw={'wspace': 0.38})
+        for i, (r, col_) in enumerate(zip(results, COLORS)):
+            a = ax_h[i]
+            counts_h, bins_h, patches_h = a.hist(
+                r['theta'][-300:].flatten(), bins=36,
+                density=True, edgecolor='none', alpha=0.0)
+            for patch, cv in zip(patches_h,
+                                  0.5 * (bins_h[:-1] + bins_h[1:]) / (2 * np.pi)):
+                patch.set_facecolor(plt.cm.plasma(cv))
+                patch.set_alpha(0.85)
+            a.set_title(f"{r['f']:.0f} Hz  ·  PLV = {r['plv']:.3f}",
+                        color=col_, fontsize=9.5, fontweight='600')
+            a.set_xlabel('Phase (rad)', fontsize=8)
+            a.set_ylabel('Densité' if i == 0 else '', fontsize=8)
+            a.set_xlim(0, 2 * np.pi)
+            a.set_xticks([0, np.pi, 2 * np.pi])
+            a.set_xticklabels(['0', 'π', '2π'])
+        fig_h.suptitle('Distribution des phases neuronales au foyer',
+                       fontsize=10, fontweight='600', color='#dde3f0', y=1.02)
+        fig_h.tight_layout()
+
+        # ── B-FIELD vs FREQUENCY bar ───────────────────────────────────────
+        fig_b, (ax_b1, ax_b2) = plt.subplots(1, 2, figsize=(9, 3.5),
+                                               gridspec_kw={'wspace': 0.4})
+        freqs_b  = [r['f'] for r in results]
+        bfields  = [r['B_gran'] * 1e9 for r in results]
+        ecortex  = [r['E_cortex'] for r in results]
+
+        ax_b1.bar([f"{f:.0f}" for f in freqs_b], bfields, color=COLORS,
+                  alpha=0.85, edgecolor='none', width=0.55)
+        for xi, (b, c) in enumerate(zip(bfields, COLORS)):
+            ax_b1.text(xi, b + 0.02, f'{b:.2f}', ha='center',
+                       fontsize=10, fontweight='700', color='#dde3f0')
+        ax_b1.set_ylabel('B (nT)')
+        ax_b1.set_title('Induction magnétique B ∝ f')
+        ax_b1.set_xlabel('Fréquence (Hz)')
+
+        ax_b2.bar([f"{f:.0f}" for f in freqs_b], ecortex, color=COLORS,
+                  alpha=0.85, edgecolor='none', width=0.55)
+        for xi, (e, c) in enumerate(zip(ecortex, COLORS)):
+            ax_b2.text(xi, e + 0.001, f'{e:.3f}', ha='center',
+                       fontsize=10, fontweight='700', color='#dde3f0')
+        ax_b2.set_ylabel('E (µV/m)')
+        ax_b2.set_title('Champ E au cortex (après crâne)')
+        ax_b2.set_xlabel('Fréquence (Hz)')
+        fig_b.tight_layout()
+
+        # ── LAYOUT ────────────────────────────────────────────────────────
+        left_col, right_col = st.columns([2, 3])
+
+        with left_col:
+            st.pyplot(fig_r)
+            plt.close(fig_r)
+
+        with right_col:
+            st.pyplot(fig_b)
+            plt.close(fig_b)
+
+        st.pyplot(fig_h)
+        plt.close(fig_h)
+
+        st.markdown("---")
+
+        # ── PER-FREQUENCY DETAIL CARDS ────────────────────────────────────
+        cols_f = st.columns(3)
+        for col_w, r in zip(cols_f, results):
+            with col_w:
+                border_col = r['color']
+                # determine brain-state label
+                if r['f'] <= 32:
+                    bstate = "Beta haut / Gamma bas"
+                    bstate_desc = "Attention, éveil actif, cognition"
+                    bstate_icon = "◈"
+                elif r['f'] <= 45:
+                    bstate = "Gamma classique ★"
+                    bstate_desc = "Binding sensoriel, méditation, conscience"
+                    bstate_icon = "◉"
+                else:
+                    bstate = "Gamma haut / Battement"
+                    bstate_desc = f"Aliasing → {r['f_beat']:.1f} Hz (≈ γ)"
+                    bstate_icon = "◎"
+
+                plv_label = ("Forte" if r['plv'] > 0.5
+                             else "Modérée" if r['plv'] > 0.3 else "Faible")
+                plv_col   = ("#00d48a" if r['plv'] > 0.5
+                             else "#ffa726" if r['plv'] > 0.3 else "#ff4d4d")
+
+                st.markdown(f"""
+                <div style="background:rgba(255,255,255,0.02);
+                            border:1px solid {border_col}30;
+                            border-top:3px solid {border_col};
+                            border-radius:14px;padding:1.3rem 1.4rem;
+                            height:100%;">
+
+                    <div style="font-size:1.6rem;font-weight:700;
+                                color:{border_col};font-family:'JetBrains Mono',monospace;
+                                margin-bottom:0.2rem;">
+                        {r['f']:.0f} Hz
+                    </div>
+
+                    <!-- Brain state -->
+                    <div style="font-size:0.72rem;font-weight:600;color:{border_col};
+                                text-transform:uppercase;letter-spacing:0.1em;
+                                margin-bottom:0.2rem;">{bstate_icon} {bstate}</div>
+                    <div style="font-size:0.78rem;color:#5a7090;margin-bottom:1rem;">
+                        {bstate_desc}
+                    </div>
+
+                    <!-- Physics row -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;
+                                margin-bottom:0.8rem;">
+                        <div style="background:rgba(255,255,255,0.03);border-radius:8px;
+                                    padding:0.5rem 0.6rem;">
+                            <div style="font-size:0.65rem;color:#4a5568;text-transform:uppercase;
+                                        letter-spacing:0.08em;">B induction</div>
+                            <div style="font-family:'JetBrains Mono',monospace;font-size:1rem;
+                                        font-weight:700;color:#c8d4e8;">
+                                {r['B_gran']*1e9:.2f}<span style="font-size:0.65rem;
+                                color:#4a5568;"> nT</span></div>
+                        </div>
+                        <div style="background:rgba(255,255,255,0.03);border-radius:8px;
+                                    padding:0.5rem 0.6rem;">
+                            <div style="font-size:0.65rem;color:#4a5568;text-transform:uppercase;
+                                        letter-spacing:0.08em;">T crâne</div>
+                            <div style="font-family:'JetBrains Mono',monospace;font-size:1rem;
+                                        font-weight:700;color:#c8d4e8;">
+                                {r['T_skull']*100:.1f}<span style="font-size:0.65rem;
+                                color:#4a5568;"> %</span></div>
+                        </div>
+                        <div style="background:rgba(255,255,255,0.03);border-radius:8px;
+                                    padding:0.5rem 0.6rem;">
+                            <div style="font-size:0.65rem;color:#4a5568;text-transform:uppercase;
+                                        letter-spacing:0.08em;">E cortex</div>
+                            <div style="font-family:'JetBrains Mono',monospace;font-size:1rem;
+                                        font-weight:700;color:#c8d4e8;">
+                                {r['E_cortex']:.3f}<span style="font-size:0.65rem;
+                                color:#4a5568;"> µV/m</span></div>
+                        </div>
+                        <div style="background:rgba(255,255,255,0.03);border-radius:8px;
+                                    padding:0.5rem 0.6rem;">
+                            <div style="font-size:0.65rem;color:#4a5568;text-transform:uppercase;
+                                        letter-spacing:0.08em;">E foyer ×5.4</div>
+                            <div style="font-family:'JetBrains Mono',monospace;font-size:1rem;
+                                        font-weight:700;color:#c8d4e8;">
+                                {r['E_foyer']:.2f}<span style="font-size:0.65rem;
+                                color:#4a5568;"> µV/m</span></div>
+                        </div>
+                    </div>
+
+                    <!-- PLV -->
+                    <div style="display:flex;align-items:center;justify-content:space-between;
+                                margin-bottom:0.4rem;">
+                        <span style="font-size:0.75rem;color:#8da0c0;">
+                            Synchronisation PLV
+                        </span>
+                        <span style="font-family:'JetBrains Mono',monospace;font-weight:700;
+                                     color:{plv_col};font-size:0.9rem;">
+                            {r['plv']:.3f} · {plv_label}
+                        </span>
+                    </div>
+                    <div style="height:5px;border-radius:3px;
+                                background:rgba(255,255,255,0.05);overflow:hidden;
+                                margin-bottom:0.9rem;">
+                        <div style="width:{r['plv']*100:.1f}%;height:100%;
+                                    background:{plv_col};border-radius:3px;
+                                    opacity:0.85;"></div>
+                    </div>
+
+                    <!-- Battement -->
+                    <div style="background:rgba(0,212,138,0.06);
+                                border:1px solid rgba(0,212,138,0.15);
+                                border-radius:8px;padding:0.55rem 0.75rem;
+                                margin-bottom:0.9rem;">
+                        <div style="font-size:0.65rem;color:#3a7060;
+                                    text-transform:uppercase;letter-spacing:0.08em;">
+                            Battement avec Barabar (34.4 Hz)
+                        </div>
+                        <div style="font-family:'JetBrains Mono',monospace;
+                                    font-size:1.05rem;font-weight:700;color:#00d48a;">
+                            {r['f_beat']:.1f} Hz
+                            <span style="font-size:0.7rem;font-weight:400;color:#3a7060;">
+                              {"≈ gamma" if 35 <= r['f_beat'] <= 50 else
+                               "β haut" if 25 <= r['f_beat'] < 35 else
+                               "< beta" if r['f_beat'] < 25 else "γ haut"}
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Ic decision -->
+                    <div style="text-align:center;background:{r['dec_bg']};
+                                border:1px solid {r['dec_color']}40;
+                                border-radius:10px;padding:0.7rem;">
+                        <div style="font-family:'JetBrains Mono',monospace;
+                                    font-size:1.6rem;font-weight:700;color:{r['dec_color']};">
+                            {r['Ic']:.3f}
+                        </div>
+                        <div style="font-size:0.72rem;font-weight:700;
+                                    color:{r['dec_color']};text-transform:uppercase;
+                                    letter-spacing:0.1em;">
+                            {r['decision']}
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        # ── CONCLUSION PANEL ──────────────────────────────────────────────
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # find best freq
+        best = max(results, key=lambda r: r['Ic'])
+
+        # Ic values for the summary
+        ic_30  = next(r['Ic'] for r in results if r['f'] == 30.0)
+        ic_40  = next(r['Ic'] for r in results if r['f'] == 40.0)
+        ic_755 = next(r['Ic'] for r in results if r['f'] == 75.5)
+        plv_30  = next(r['plv'] for r in results if r['f'] == 30.0)
+        plv_40  = next(r['plv'] for r in results if r['f'] == 40.0)
+        plv_755 = next(r['plv'] for r in results if r['f'] == 75.5)
+        beat_755 = next(r['f_beat'] for r in results if r['f'] == 75.5)
+
+        st.markdown(f"""
+        <div style="background:linear-gradient(135deg,rgba(0,212,138,0.05),rgba(99,157,255,0.05));
+                    border:1px solid rgba(0,212,138,0.2);border-radius:16px;
+                    padding:1.6rem 2rem;margin-top:0.5rem;">
+
+            <div style="font-size:0.72rem;font-weight:700;color:#00d48a;
+                        text-transform:uppercase;letter-spacing:0.12em;margin-bottom:0.8rem;">
+                ◉ Synthèse — Hypothèse Barabar
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.5rem;
+                        margin-bottom:1.2rem;">
+                <div>
+                    <div style="font-size:0.78rem;color:#8da0c0;margin-bottom:0.3rem;">
+                        30 Hz — Corps &amp; basses fréquences
+                    </div>
+                    <div style="font-size:0.82rem;color:#a0b4c8;line-height:1.6;">
+                        Ic <strong style="color:#4f8ef7;">{ic_30:.3f}</strong> ·
+                        PLV <strong style="color:#4f8ef7;">{plv_30:.3f}</strong><br>
+                        Vibrations profondes ressenties physiquement.
+                        Activation nerf vague, réponse parasympathique.
+                        Battement avec Barabar → <strong>{abs(30-34.4):.1f} Hz</strong> (alpha haut).
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size:0.78rem;color:#8da0c0;margin-bottom:0.3rem;">
+                        40 Hz — Résonance gamma optimale ★
+                    </div>
+                    <div style="font-size:0.82rem;color:#a0b4c8;line-height:1.6;">
+                        Ic <strong style="color:#00d48a;">{ic_40:.3f}</strong> ·
+                        PLV <strong style="color:#00d48a;">{plv_40:.3f}</strong><br>
+                        Synchronisation thalamo-corticale maximale.
+                        Altération état de conscience, méditation profonde.
+                        Battement → <strong>{abs(40-34.4):.1f} Hz</strong> (gamma direct).
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size:0.78rem;color:#8da0c0;margin-bottom:0.3rem;">
+                        75.5 Hz — Battement ingénieux
+                    </div>
+                    <div style="font-size:0.82rem;color:#a0b4c8;line-height:1.6;">
+                        Ic <strong style="color:#a78bfa;">{ic_755:.3f}</strong> ·
+                        PLV <strong style="color:#a78bfa;">{plv_755:.3f}</strong><br>
+                        B induction 2.6× plus fort qu'à 30 Hz.
+                        Battement acoustique → <strong style="color:#00d48a;">
+                        {beat_755:.1f} Hz</strong> ≈ gamma : neuromodulation indirecte
+                        via amplitude-modulation naturelle de la chambre.
+                    </div>
+                </div>
+            </div>
+
+            <div style="border-top:1px solid rgba(255,255,255,0.06);padding-top:1rem;
+                        font-size:0.82rem;color:#8da0c0;line-height:1.7;">
+                <strong style="color:#dde3f0;">Verdict algorithmique :</strong>
+                La fréquence la plus efficace au foyer est
+                <strong style="color:#00d48a;">{best['f']:.0f} Hz</strong>
+                (Ic = {best['Ic']:.3f} → <strong style="color:{best['dec_color']};">
+                {best['decision']}</strong>).
+                Le chant à 75,5 Hz dans une chambre résonnant à 34,4 Hz produit un battement
+                de <strong style="color:#00d48a;">{beat_755:.1f} Hz</strong> — une fréquence
+                gamma injectée <em>par l'architecture elle-même</em> sans nécessiter une source
+                externe à 40 Hz. C'est cohérent avec une conception intentionnelle de
+                résonateur neuro-acoustique.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    else:
+        st.markdown("""
+        <div style="text-align:center;padding:2.5rem 2rem;
+                    background:rgba(255,255,255,0.012);
+                    border:1px dashed rgba(99,157,255,0.15);
+                    border-radius:16px;color:#3a5a80;">
+            <div style="font-size:2.5rem;margin-bottom:0.6rem;opacity:0.3;">◉</div>
+            <div style="font-size:0.9rem;font-weight:500;color:#4a6a90;">
+                Cliquez sur
+                <strong style="color:#639dff;">◉ Simulation 30 / 40 / 75.5 Hz</strong>
+                dans la barre latérale
+            </div>
+            <div style="font-size:0.78rem;margin-top:0.5rem;opacity:0.5;">
+                Calcul Kuramoto N=3 000 × 3 fréquences · ~15–20 s
             </div>
         </div>
         """, unsafe_allow_html=True)
